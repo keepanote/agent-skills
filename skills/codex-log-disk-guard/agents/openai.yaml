@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Log Disk Guard"
+  short_description: "Guard and monitor Codex log disk writes"
+  default_prompt: "Use $codex-log-disk-guard to inspect, block, compact, or monitor Codex SQLite log write storms on Windows."

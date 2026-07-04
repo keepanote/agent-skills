@@ -1,0 +1,36 @@
+name: skill-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Python scripts
+        run: |
+          python -m py_compile skills/codex-log-disk-guard/scripts/codex_log_guard.py
+          python -m py_compile skills/codex-log-disk-guard/scripts/monitor_disk_writes_linux.py
+
+      - name: Help smoke test
+        run: python skills/codex-log-disk-guard/scripts/codex_log_guard.py --help
+
+      - name: Linux monitor help
+        if: runner.os == 'Linux'
+        run: python skills/codex-log-disk-guard/scripts/monitor_disk_writes_linux.py --help
+
+      - name: Windows monitor smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./skills/codex-log-disk-guard/scripts/monitor_disk_writes.ps1 -Iterations 1 -Top 3
