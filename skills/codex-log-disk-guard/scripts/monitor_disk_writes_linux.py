@@ -38,7 +38,7 @@ _CLEAR_BELOW = "\033[J"
 def _detect_colour(no_color_flag: bool) -> bool:
     """Decide whether to emit ANSI colour codes.
 
-    Respects the standard NO_COLOR / FORCE_COLOR convention and TERM.
+    Respects NO_COLOR / FORCE_COLOR, then assumes any modern TTY has colour.
     """
     if no_color_flag:
         return False
@@ -48,25 +48,22 @@ def _detect_colour(no_color_flag: bool) -> bool:
         return True
     if not sys.stdout.isatty():
         return False
-    term = os.environ.get("TERM", "")
-    if term == "dumb":
+    if os.environ.get("TERM", "") == "dumb":
         return False
-    # Most modern terminals support colour; xterm-256color, screen-256color,
-    # tmux-256color, alacritty, kitty, etc.
-    if "256color" in term or "color" in term:
-        return True
-    # Fallback: assume yes for interactive TTYs on common terms
-    if term in ("xterm", "screen", "tmux", "linux", "vt100", "vt220"):
-        return True
-    return False
+    # Assume yes for any interactive terminal — virtually all modern
+    # terminal emulators (including VS Code, JetBrains, iTerm2, Windows
+    # Terminal, Gnome Terminal, Konsole, etc.) support ANSI colours.
+    return True
 
 
 def _colour_for_rate(rate_bytes_per_sec: float) -> str:
-    """Return an ANSI colour code for a write rate, or empty string."""
-    if rate_bytes_per_sec > 10 * 1024 * 1024:
+    """Return an ANSI colour for a write rate: red→yellow→green→none."""
+    if rate_bytes_per_sec > 10 * 1024 * 1024:   # > 10 MB/s  🔴 heavy
         return _RED
-    if rate_bytes_per_sec > 1 * 1024 * 1024:
+    if rate_bytes_per_sec > 1 * 1024 * 1024:    # >  1 MB/s  🟡 moderate
         return _YELLOW
+    if rate_bytes_per_sec >= 1024:              # ≥  1 KB/s  🟢 light
+        return _GREEN
     return ""
 
 
@@ -265,7 +262,7 @@ def build_frame(
              f"Σ={tval:.2f}{tunit}", f"#{iteration}"]
     if reset_count:
         parts.append(f"⚠ {reset_count} reset(s)")
-    disp.add("  ".join(parts), bold=True)
+    disp.add("  ".join(parts), bold=True, colour=_CYAN)
 
     # --- Table ---
     width = _term_width()
@@ -300,7 +297,10 @@ def build_frame(
 
     # --- Footer with totals ---
     disp.add_rule()
-    disp.add(f"{'Total':>9}  {'':>7}  {tval:.2f}{tunit} across {rows_total} processes", dim=True)
+    disp.add(
+        f"{'Total':>9}  {'':>7}  {tval:.2f}{tunit} across {rows_total} processes",
+        dim=True, colour=_colour_for_rate(total_rate),
+    )
 
     # --- Watched paths ---
     if watch_paths:
