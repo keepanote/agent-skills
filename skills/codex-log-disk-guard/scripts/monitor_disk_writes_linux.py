@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import sys
@@ -80,8 +81,8 @@ def _want_colour(args: argparse.Namespace) -> bool:
         return True
     if os.environ.get("FORCE_COLOR"):
         return True
-    # Auto-detect: only when explicitly asked or TERM advertises colour
-    if not sys.stdout.isatty():
+    # Display writes to stderr; check stderr for TTY
+    if not sys.stderr.isatty():
         return False
     term = os.environ.get("TERM", "")
     if "256color" in term or "color" in term:
@@ -95,8 +96,7 @@ def _want_refresh(args: argparse.Namespace) -> bool:
         return False
     if args.refresh:
         return True
-    # Auto-detect: refresh only makes sense with a colour-capable TTY
-    if not sys.stdout.isatty():
+    if not sys.stderr.isatty():
         return False
     if os.environ.get("FORCE_COLOR"):
         return True
@@ -112,11 +112,12 @@ def _want_refresh(args: argparse.Namespace) -> bool:
 class TerminalDisplay:
     """Frame-buffered output with optional alternate-screen refresh."""
 
-    def __init__(self, use_colour: bool, use_refresh: bool) -> None:
+    def __init__(self, use_colour: bool, use_refresh: bool, outfile=sys.stderr) -> None:
         self._colour = use_colour
         self._refresh = use_refresh
         self._active = False
         self._buf: List[str] = []
+        self._file = outfile
 
     @property
     def colour(self) -> bool:
@@ -153,17 +154,16 @@ class TerminalDisplay:
                 self._active = True
             out.append("\033[H")   # home
         else:
-            # Scroll mode: ensure frames don't concatenate
             out.append("\n")
         out.append(frame)
-        sys.stdout.write("".join(out))
-        sys.stdout.flush()
+        self._file.write("".join(out))
+        self._file.flush()
 
     def cleanup(self) -> None:
         if self._refresh and self._active:
-            sys.stdout.write(_CURSOR_SHOW)
-            sys.stdout.write(_ALT_LEAVE)
-            sys.stdout.flush()
+            self._file.write(_CURSOR_SHOW)
+            self._file.write(_ALT_LEAVE)
+            self._file.flush()
 
 
 # ======================================================================
@@ -176,6 +176,22 @@ def _check_proc() -> pathlib.Path:
     return root
 
 
+def _sanitize_name(raw: str) -> str:
+    """Strip ANSI escapes and control chars from a process name.
+
+    /proc/<pid>/comm can legally contain any byte except NUL, including
+    carriage returns and ANSI escape sequences that would corrupt terminal
+    output.  We replace them so the display stays intact.
+    """
+    # Strip ANSI CSI sequences (ESC [ ... m / ESC [ ... K / etc.)
+    clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw)
+    # Replace remaining ASCII control chars (0x00-0x1F, 0x7F) with space
+    clean = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", clean)
+    # Collapse whitespace and trim
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean[:64] if len(clean) > 64 else clean
+
+
 def read_process_sample() -> Dict[int, dict]:
     root = _check_proc()
     rows: Dict[int, dict] = {}
@@ -186,7 +202,10 @@ def read_process_sample() -> Dict[int, dict]:
         io_file = entry / "io"
         comm_file = entry / "comm"
         try:
-            name = comm_file.read_text(encoding="utf-8", errors="replace").strip()
+            raw = comm_file.read_text(encoding="utf-8", errors="replace").strip()
+            name = _sanitize_name(raw)
+            if not name:
+                name = f"pid-{pid}"
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
         try:
