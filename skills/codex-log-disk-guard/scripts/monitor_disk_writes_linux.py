@@ -29,7 +29,6 @@ _CYAN = "\033[96m"
 
 _CURSOR_HIDE = "\033[?25l"
 _CURSOR_SHOW = "\033[?25h"
-_CLEAR_BELOW = "\033[J"
 
 
 # ======================================================================
@@ -106,24 +105,29 @@ def _term_width() -> int:
 
 
 # ======================================================================
-# Terminal display — flicker-free in-place refresh
+# Terminal display — alternate-screen refresh (like top / htop / vim)
 # ======================================================================
 class TerminalDisplay:
-    """Buffered terminal output with in-place overwrite and cursor control.
+    """Buffered full-frame output using the alternate screen buffer.
 
-    On the first render the frame is printed at the current cursor position.
-    Every subsequent render moves the cursor back up to overwrite the
-    previous frame so the display updates in-place instead of scrolling.
+    On first render the terminal switches to the *alternate screen*
+    (``\\033[?1049h``), clearing the window.  Each subsequent render
+    homes the cursor (``\\033[H``) and redraws — no line counting, no
+    flicker, no scrolling.  On exit the original screen is restored
+    (``\\033[?1049l``).
 
-    All output is accumulated into a single string buffer and written in one
-    ``sys.stdout.write()`` call to eliminate flicker.
+    When *use_refresh* is False (pipe, ``--no-refresh``, or ``--json``)
+    the alternate screen is **not** used; each frame is printed as a
+    standalone block — suitable for logging or processing.
     """
+
+    _ALT_ENTER = "\033[?1049h"   # switch to alternate screen buffer
+    _ALT_LEAVE = "\033[?1049l"   # restore original screen buffer
 
     def __init__(self, use_colour: bool, use_refresh: bool = True) -> None:
         self._use_colour = use_colour
         self._use_refresh = use_refresh
-        self._prev_lines = 0
-        self._active = False          # True after first render
+        self._active = False
         self._buf: List[str] = []
 
     # -- public API --------------------------------------------------------
@@ -133,7 +137,7 @@ class TerminalDisplay:
         return self._use_colour
 
     def add(self, text: str, *, colour: str = "", bold: bool = False, dim: bool = False) -> None:
-        """Append a line (may contain embedded newlines) to the frame buffer."""
+        """Append a line to the frame buffer (may contain embedded newlines)."""
         prefix = ""
         if bold:
             prefix += _BOLD
@@ -149,38 +153,35 @@ class TerminalDisplay:
         self.add("─" * _term_width(), dim=True)
 
     def render(self) -> None:
-        """Write the buffered frame to stdout, overwriting the previous one."""
+        """Write the buffered frame to stdout.
+
+        In refresh mode the cursor is homed to (1,1) before each frame so
+        the display updates in-place.  Outside refresh mode each frame is
+        printed as a standalone block.
+        """
         frame = "\n".join(self._buf)
         self._buf.clear()
-        lines = frame.count("\n") + (0 if frame.endswith("\n") else 1)
 
         out: List[str] = []
 
         if self._use_refresh:
-            if self._active:
-                # Move cursor back to start of previous frame, then clear below
-                out.append(f"\033[{self._prev_lines}A")
-                out.append(_CLEAR_BELOW)
-            else:
-                # First render: hide cursor from now on
+            if not self._active:
+                # Enter alternate screen + hide cursor (once)
+                out.append(self._ALT_ENTER)
                 out.append(_CURSOR_HIDE)
                 self._active = True
+            # Home cursor to top-left for each frame
+            out.append("\033[H")
 
         out.append(frame)
         sys.stdout.write("".join(out))
         sys.stdout.flush()
 
-        if self._use_refresh:
-            self._prev_lines = lines
-        else:
-            # Non-refresh mode: don't track position; each render is a new block
-            self._active = False
-            self._prev_lines = 0
-
     def cleanup(self) -> None:
-        """Restore terminal state (show cursor) on exit."""
+        """Leave alternate screen and show cursor."""
         if self._use_refresh and self._active:
             sys.stdout.write(_CURSOR_SHOW)
+            sys.stdout.write(self._ALT_LEAVE)
             sys.stdout.flush()
 
 
