@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Monitor Linux per-process disk write rates via /proc/<pid>/io.
 
-Shows top N processes by write throughput with appropriate rate units,
-optional file-size watching, counter-reset detection, colour output,
-and graceful shutdown on Ctrl+C.
+Shows top N processes by write throughput with in-place refresh (no scroll),
+colour-coded rates, counter-reset detection, and graceful Ctrl+C shutdown.
 """
 
 import argparse
@@ -17,31 +16,63 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 
-# ---------------------------------------------------------------------------
-# ANSI helpers
-# ---------------------------------------------------------------------------
-
+# ======================================================================
+# ANSI escape sequences
+# ======================================================================
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _RED = "\033[91m"
 _YELLOW = "\033[93m"
 _GREEN = "\033[92m"
+_CYAN = "\033[96m"
+
+_CURSOR_HIDE = "\033[?25l"
+_CURSOR_SHOW = "\033[?25h"
+_CLEAR_BELOW = "\033[J"
+
+
+# ======================================================================
+# Colour detection
+# ======================================================================
+def _detect_colour(no_color_flag: bool) -> bool:
+    """Decide whether to emit ANSI colour codes.
+
+    Respects the standard NO_COLOR / FORCE_COLOR convention and TERM.
+    """
+    if no_color_flag:
+        return False
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    if not sys.stdout.isatty():
+        return False
+    term = os.environ.get("TERM", "")
+    if term == "dumb":
+        return False
+    # Most modern terminals support colour; xterm-256color, screen-256color,
+    # tmux-256color, alacritty, kitty, etc.
+    if "256color" in term or "color" in term:
+        return True
+    # Fallback: assume yes for interactive TTYs on common terms
+    if term in ("xterm", "screen", "tmux", "linux", "vt100", "vt220"):
+        return True
+    return False
 
 
 def _colour_for_rate(rate_bytes_per_sec: float) -> str:
     """Return an ANSI colour code for a write rate, or empty string."""
-    if rate_bytes_per_sec > 10 * 1024 * 1024:      # > 10 MB/s
+    if rate_bytes_per_sec > 10 * 1024 * 1024:
         return _RED
-    if rate_bytes_per_sec > 1 * 1024 * 1024:       # >  1 MB/s
+    if rate_bytes_per_sec > 1 * 1024 * 1024:
         return _YELLOW
     return ""
 
 
-# ---------------------------------------------------------------------------
-# Formatting
-# ---------------------------------------------------------------------------
-
+# ======================================================================
+# Formatting helpers
+# ======================================================================
 _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 
@@ -55,7 +86,7 @@ def _human_size(n: float) -> str:
         if n < 1024 or unit == _SIZE_UNITS[-1]:
             return f"{sign}{n:,.2f} {unit}"
         n /= 1024
-    return f"{sign}{n:,.2f} {_SIZE_UNITS[-1]}"  # unreachable, kept for safety
+    return f"{sign}{n:,.2f} {_SIZE_UNITS[-1]}"
 
 
 def _human_rate(bytes_per_sec: float) -> Tuple[float, str]:
@@ -77,10 +108,88 @@ def _term_width() -> int:
         return 120
 
 
-# ---------------------------------------------------------------------------
-# /proc data collection
-# ---------------------------------------------------------------------------
+# ======================================================================
+# Terminal display — flicker-free in-place refresh
+# ======================================================================
+class TerminalDisplay:
+    """Buffered terminal output with in-place overwrite and cursor control.
 
+    On the first render the frame is printed at the current cursor position.
+    Every subsequent render moves the cursor back up to overwrite the
+    previous frame so the display updates in-place instead of scrolling.
+
+    All output is accumulated into a single string buffer and written in one
+    ``sys.stdout.write()`` call to eliminate flicker.
+    """
+
+    def __init__(self, use_colour: bool, use_refresh: bool = True) -> None:
+        self._use_colour = use_colour
+        self._use_refresh = use_refresh
+        self._prev_lines = 0
+        self._active = False          # True after first render
+        self._buf: List[str] = []
+
+    # -- public API --------------------------------------------------------
+
+    @property
+    def use_colour(self) -> bool:
+        return self._use_colour
+
+    def add(self, text: str, *, colour: str = "", bold: bool = False, dim: bool = False) -> None:
+        """Append a line (may contain embedded newlines) to the frame buffer."""
+        prefix = ""
+        if bold:
+            prefix += _BOLD
+        if dim:
+            prefix += _DIM
+        if colour and self._use_colour:
+            prefix += colour
+        suffix = _RESET if prefix else ""
+        self._buf.append(f"{prefix}{text}{suffix}")
+
+    def add_rule(self) -> None:
+        """Append a horizontal rule spanning the terminal width."""
+        self.add("─" * _term_width(), dim=True)
+
+    def render(self) -> None:
+        """Write the buffered frame to stdout, overwriting the previous one."""
+        frame = "\n".join(self._buf)
+        self._buf.clear()
+        lines = frame.count("\n") + (0 if frame.endswith("\n") else 1)
+
+        out: List[str] = []
+
+        if self._use_refresh:
+            if self._active:
+                # Move cursor back to start of previous frame, then clear below
+                out.append(f"\033[{self._prev_lines}A")
+                out.append(_CLEAR_BELOW)
+            else:
+                # First render: hide cursor from now on
+                out.append(_CURSOR_HIDE)
+                self._active = True
+
+        out.append(frame)
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+
+        if self._use_refresh:
+            self._prev_lines = lines
+        else:
+            # Non-refresh mode: don't track position; each render is a new block
+            self._active = False
+            self._prev_lines = 0
+
+    def cleanup(self) -> None:
+        """Restore terminal state (show cursor) on exit."""
+        if self._use_refresh and self._active:
+            sys.stdout.write(_CURSOR_SHOW)
+            sys.stdout.flush()
+
+
+# ======================================================================
+# /proc data collection
+# ======================================================================
 def _check_proc() -> pathlib.Path:
     """Return /proc path or exit with a clear message."""
     root = pathlib.Path("/proc")
@@ -131,77 +240,86 @@ def read_path_sizes(paths: List[str]) -> Dict[str, Optional[int]]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Rendering
-# ---------------------------------------------------------------------------
-
-def render_table(
-    rows: List[dict],
-    interval: float,
-    use_colour: bool,
+# ======================================================================
+# Frame builder — builds the entire display frame as a list of lines
+# ======================================================================
+def build_frame(
+    disp: TerminalDisplay,
+    top_rows: List[dict],
     total_rate: float,
+    rows_total: int,
+    reset_count: int,
+    iteration: int,
+    interval: float,
+    top_n: int,
+    watch_paths: List[str],
+    previous_paths: Dict[str, Optional[int]],
+    current_paths: Dict[str, Optional[int]],
 ) -> None:
-    """Print a formatted top-N table of per-process write rates."""
-    width = _term_width()
+    """Add all lines for one monitoring frame to *disp*."""
 
-    # Header
-    print(f"\n{_BOLD}{'RATE':>9}  {'PID':>7}  PROCESS{_RESET}")
-    print(f"{_DIM}{'─' * width}{_RESET}")
-
-    if not rows:
-        print(f"{_DIM}  (no process write activity detected in this interval){_RESET}")
-        return
-
-    for row in rows:
-        rate = row["rate"]                       # bytes/sec
-        val, unit = _human_rate(rate)
-
-        col = _colour_for_rate(rate) if use_colour else ""
-        name = row["name"]
-        flag = row.get("flag", "")
-
-        # Reserve space for the flag
-        flag_str = f" {_RED}{flag}{_RESET}" if flag and use_colour else f" {flag}" if flag else ""
-
-        # Truncate name so the line fits terminal width
-        # 9 (rate) + 2 spaces + 7 (pid) + 2 spaces + name + flag
-        prefix_len = 9 + 2 + 7 + 2
-        max_name = max(6, width - prefix_len - len(flag_str) - 2)
-        if len(name) > max_name:
-            name = name[: max_name - 1] + "…"
-
-        print(
-            f"{col}{val:8.2f}{unit}  {row['pid']:7d}  {name}{flag_str}{_RESET}"
-        )
-
-    # Summary footer
+    # --- Title bar ---
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
     tval, tunit = _human_rate(total_rate)
-    print(f"{_DIM}{'─' * width}{_RESET}")
-    print(f"{_DIM}{'Total':>9}  {'':>7}  {tval:.2f}{tunit} across {len(rows)} processes{_RESET}")
+    parts = [f"[{ts}]", f"interval={interval}s", f"top={top_n}",
+             f"Σ={tval:.2f}{tunit}", f"#{iteration}"]
+    if reset_count:
+        parts.append(f"⚠ {reset_count} reset(s)")
+    disp.add("  ".join(parts), bold=True)
+
+    # --- Table ---
+    width = _term_width()
+    disp.add_rule()
+    disp.add(f"{'RATE':>9}  {'PID':>7}  PROCESS", bold=True)
+    disp.add_rule()
+
+    if not top_rows:
+        disp.add("  (no process write activity in this interval)", dim=True)
+    else:
+        for row in top_rows:
+            rate = row["rate"]
+            val, unit = _human_rate(rate)
+            col = _colour_for_rate(rate)
+            name = row["name"]
+            flag = row.get("flag", "")
+
+            flag_str = ""
+            if flag:
+                flag_str = f" {_RED}{flag}{_RESET}" if disp.use_colour else f" {flag}"
+
+            # Truncate name so line fits terminal
+            prefix_len = 9 + 2 + 7 + 2
+            max_name = max(6, width - prefix_len - len(flag) - 2)
+            if len(name) > max_name:
+                name = name[: max_name - 1] + "…"
+
+            disp.add(
+                f"{val:8.2f}{unit}  {row['pid']:7d}  {name}{flag_str}",
+                colour=col,
+            )
+
+    # --- Footer with totals ---
+    disp.add_rule()
+    disp.add(f"{'Total':>9}  {'':>7}  {tval:.2f}{tunit} across {rows_total} processes", dim=True)
+
+    # --- Watched paths ---
+    if watch_paths:
+        disp.add("")
+        disp.add(f"{'DELTA':>12}  PATH", bold=True)
+        for path in watch_paths:
+            prev = previous_paths.get(path)
+            curr = current_paths.get(path)
+            if prev is not None and curr is not None:
+                delta = curr - prev
+                delta_str = _human_size(delta)
+            else:
+                delta_str = "n/a"
+            disp.add(f"{delta_str:>12}  {path}")
 
 
-def render_path_table(
-    before: Dict[str, Optional[int]],
-    after: Dict[str, Optional[int]],
-    paths: List[str],
-) -> None:
-    """Print file-size deltas for watched paths."""
-    print(f"\n{_BOLD}{'DELTA':>12}  PATH{_RESET}")
-    for path in paths:
-        prev = before.get(path)
-        curr = after.get(path)
-        if prev is not None and curr is not None:
-            delta = curr - prev
-            delta_str = _human_size(delta)
-        else:
-            delta_str = "n/a"
-        print(f"{delta_str:>12}  {path}")
-
-
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-
+# ======================================================================
+# Argument parsing
+# ======================================================================
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Monitor Linux per-process disk write rates from /proc/<pid>/io."
@@ -230,15 +348,20 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--no-color", action="store_true",
         help="Disable ANSI colour output",
     )
+    parser.add_argument(
+        "--no-refresh", action="store_true",
+        help="Disable in-place refresh (print each sample as a new block; useful for logging)",
+    )
     return parser.parse_args(argv)
 
 
+# ======================================================================
+# Main
+# ======================================================================
 def main(argv: Optional[List[str]] = None) -> None:
     args = _parse_args(argv)
 
-    # ------------------------------------------------------------------
-    # Signal handling
-    # ------------------------------------------------------------------
+    # --- Signal handling ---
     shutdown = False
 
     def _on_signal(signum: int, frame: object) -> None:
@@ -248,11 +371,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    use_colour = not args.no_color and sys.stdout.isatty()
+    use_colour = _detect_colour(args.no_color)
+    use_refresh = not args.json and not args.no_refresh and sys.stdout.isatty()
 
-    # ------------------------------------------------------------------
-    # First sample (baseline)
-    # ------------------------------------------------------------------
+    # --- First sample (baseline) ---
     try:
         previous = read_process_sample()
     except SystemExit:
@@ -264,126 +386,108 @@ def main(argv: Optional[List[str]] = None) -> None:
     previous_paths = read_path_sizes(args.watch_path)
     iteration = 0
 
-    print(f"Sampling every {args.interval_seconds}s, showing top {args.top}. "
-          f"Press Ctrl+C to stop.", file=sys.stderr)
+    # --- Display ---
+    disp = TerminalDisplay(use_colour, use_refresh)
 
-    # ------------------------------------------------------------------
-    # Loop
-    # ------------------------------------------------------------------
-    while not shutdown:
-        time.sleep(args.interval_seconds)
-        iteration += 1
+    # One-time hint to stderr (doesn't interfere with the display)
+    if not args.json:
+        print(f"Sampling every {args.interval_seconds}s, showing top {args.top}. "
+              f"Press Ctrl+C to stop.", file=sys.stderr)
 
-        current = read_process_sample()
-        rows: List[dict] = []
-        total_rate = 0.0
-        reset_count = 0
-        new_count = 0
+    # --- Main loop ---
+    try:
+        while not shutdown:
+            time.sleep(args.interval_seconds)
+            iteration += 1
 
-        for pid, now in current.items():
-            before = previous.get(pid)
-            if before is None:
-                # Process started after our baseline — skip first delta
-                new_count += 1
-                continue
+            current = read_process_sample()
+            rows: List[dict] = []
+            total_rate = 0.0
+            reset_count = 0
 
-            raw_delta = now["write_bytes"] - before["write_bytes"]
+            for pid, now in current.items():
+                before = previous.get(pid)
+                if before is None:
+                    continue
 
-            # Detect counter reset: when write_bytes goes backwards the
-            # process (or one of its threads) has restarted and the
-            # kernel counter started from zero again.
-            flag = ""
-            if raw_delta < 0:
-                flag = "[reset]"
-                reset_count += 1
-                # Best-effort: treat the current counter value as the
-                # delta for this interval.
-                raw_delta = now["write_bytes"]
+                raw_delta = now["write_bytes"] - before["write_bytes"]
 
-            delta = max(0, raw_delta)
-            rate = delta / args.interval_seconds
-            total_rate += rate
+                # Counter reset detection
+                flag = ""
+                if raw_delta < 0:
+                    flag = "[reset]"
+                    reset_count += 1
+                    raw_delta = now["write_bytes"]
 
-            rows.append({
-                "pid": pid,
-                "name": now["name"],
-                "delta": delta,
-                "rate": rate,
-                "flag": flag,
-            })
+                delta = max(0, raw_delta)
+                rate = delta / args.interval_seconds
+                total_rate += rate
 
-        rows.sort(key=lambda item: item["rate"], reverse=True)
-        top_rows = rows[: args.top]
+                rows.append({
+                    "pid": pid,
+                    "name": now["name"],
+                    "delta": delta,
+                    "rate": rate,
+                    "flag": flag,
+                })
 
-        current_paths = read_path_sizes(args.watch_path)
+            rows.sort(key=lambda item: item["rate"], reverse=True)
+            top_rows = rows[: args.top]
+            current_paths = read_path_sizes(args.watch_path)
 
-        # ----------------------------------------------------------
-        # Output
-        # ----------------------------------------------------------
-        if args.json:
-            print(
-                json.dumps(
-                    {
-                        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "interval_seconds": args.interval_seconds,
-                        "iteration": iteration,
-                        "total_rate_bytes_per_sec": total_rate,
-                        "processes_seen": len(rows),
-                        "resets_detected": reset_count,
-                        "new_processes_skipped": new_count,
-                        "rows": [
-                            {
-                                "pid": r["pid"],
-                                "name": r["name"],
-                                "delta_bytes": r["delta"],
-                                "rate_bytes_per_sec": r["rate"],
-                                "flag": r.get("flag", ""),
-                            }
-                            for r in top_rows
-                        ],
-                        "paths": [
-                            {
-                                "path": p,
-                                "previous": previous_paths.get(p),
-                                "current": current_paths.get(p),
-                                "delta": (
-                                    current_paths.get(p) - previous_paths.get(p)
-                                    if previous_paths.get(p) is not None
-                                    and current_paths.get(p) is not None
-                                    else None
-                                ),
-                            }
-                            for p in args.watch_path
-                        ],
-                    },
-                    ensure_ascii=False,
+            # --- Output ---
+            if args.json:
+                print(json.dumps({
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "interval_seconds": args.interval_seconds,
+                    "iteration": iteration,
+                    "total_rate_bytes_per_sec": total_rate,
+                    "processes_seen": len(rows),
+                    "resets_detected": reset_count,
+                    "rows": [
+                        {
+                            "pid": r["pid"],
+                            "name": r["name"],
+                            "delta_bytes": r["delta"],
+                            "rate_bytes_per_sec": r["rate"],
+                            "flag": r.get("flag", ""),
+                        }
+                        for r in top_rows
+                    ],
+                    "paths": [
+                        {
+                            "path": p,
+                            "previous": previous_paths.get(p),
+                            "current": current_paths.get(p),
+                            "delta": (
+                                current_paths.get(p) - previous_paths.get(p)
+                                if previous_paths.get(p) is not None
+                                and current_paths.get(p) is not None
+                                else None
+                            ),
+                        }
+                        for p in args.watch_path
+                    ],
+                }, ensure_ascii=False))
+            else:
+                build_frame(
+                    disp, top_rows, total_rate, len(rows), reset_count,
+                    iteration, args.interval_seconds, args.top,
+                    args.watch_path, previous_paths, current_paths,
                 )
-            )
-        else:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            tval, tunit = _human_rate(total_rate)
-            extra = ""
-            if reset_count:
-                extra += f"  ⚠ {reset_count} reset(s)"
-            print(f"\n{_BOLD}[{ts}]  interval={args.interval_seconds}s  "
-                  f"top={args.top}  Σ={tval:.2f}{tunit}{extra}{_RESET}")
+                disp.render()
 
-            render_table(top_rows, args.interval_seconds, use_colour, total_rate)
+            # --- Advance ---
+            previous = current
+            previous_paths = current_paths
 
-            if args.watch_path:
-                render_path_table(previous_paths, current_paths, args.watch_path)
+            if args.iterations > 0 and iteration >= args.iterations:
+                break
 
-        # ----------------------------------------------------------
-        # Advance
-        # ----------------------------------------------------------
-        previous = current
-        previous_paths = current_paths
-
-        if args.iterations > 0 and iteration >= args.iterations:
-            break
-
-    if shutdown:
-        print("\nInterrupted.", file=sys.stderr)
+    finally:
+        disp.cleanup()
+        if shutdown:
+            print("Interrupted.", file=sys.stderr)
 
 
 if __name__ == "__main__":
