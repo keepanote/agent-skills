@@ -10,24 +10,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Get-ProcessSample {
-    $counterPaths = @(
-        '\Process(*)\IO Write Bytes/sec',
-        '\Process(*)\ID Process'
-    )
-    $samples = (Get-Counter -Counter $counterPaths).CounterSamples
-    $writes = $samples | Where-Object { $_.Path -like '*\IO Write Bytes/sec' }
-    $ids = @{}
-    foreach ($sample in ($samples | Where-Object { $_.Path -like '*\ID Process' })) {
-        $ids[$sample.InstanceName] = [int]$sample.CookedValue
-    }
-    foreach ($sample in $writes) {
-        if ($sample.InstanceName -in @('_total', 'idle')) {
+    $rows = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process
+    foreach ($row in $rows) {
+        if ($row.Name -in @('_Total', 'Idle')) {
             continue
         }
         [pscustomobject]@{
-            Id = if ($ids.ContainsKey($sample.InstanceName)) { $ids[$sample.InstanceName] } else { $null }
-            Name = $sample.InstanceName
-            WriteBytesPerSec = [double]$sample.CookedValue
+            Id = [int]$row.IDProcess
+            Name = [string]$row.Name
+            WriteBytesPerSec = [double]$row.IOWriteBytesPersec
         }
     }
 }

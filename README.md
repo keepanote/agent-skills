@@ -19,11 +19,17 @@ Installers then link those skills into the directories used by Codex and Claude 
 ## Current skills
 
 - `codex-log-disk-guard`
+- `agent-skills-publisher`
 
-## Example prompts
+## 中文说明
 
-- `帮我检查 ~/.codex/logs_2.sqlite 是否因 TRACE 日志持续高频写盘；如果中招，先备份，再用 SQLite trigger 拦截 logs 表 insert，并 checkpoint/truncate WAL，最后采样确认 MAX(id) 和 WAL 不再增长`
-- `Inspect ~/.codex/logs_2.sqlite for a TRACE write storm, back it up, block new logs inserts with a SQLite trigger, checkpoint and truncate WAL, then sample MAX(id) and WAL until both stay flat.`
+这个仓库用于集中管理多个 AI skill。真实 skill 正本统一放在 `skills/` 目录下，再通过安装脚本链接到 Codex 和 Claude Code 的技能目录，避免维护多份副本。适合把常用排障、发布、研究、自动化类 skill 都收敛到一个 GitHub 仓库里。
+
+## Example skill prompts
+
+- `Use $codex-log-disk-guard to inspect ~/.codex/logs_2.sqlite, block runaway TRACE inserts, checkpoint WAL, and verify that MAX(id) stops growing.`
+- `使用 $codex-log-disk-guard 检查 ~/.codex/logs_2.sqlite，必要时备份、阻断 logs 写入、truncate WAL，并确认 MAX(id) 不再增长。`
+- `Use $agent-skills-publisher to install this shared skill repo for both Codex and Claude Code, then prepare it for GitHub publishing.`
 
 ## Install on Windows
 

@@ -6,6 +6,23 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Remove-LinkPath {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $item = Get-Item -LiteralPath $Path -Force
+    $isReparse = $item.Attributes.ToString().Contains('ReparsePoint')
+    if (-not $isReparse) {
+        return
+    }
+    if ($item.PSIsContainer) {
+        [System.IO.Directory]::Delete($Path)
+    } else {
+        Remove-Item -LiteralPath $Path -Force
+    }
+}
+
 $canonicalRoot = Join-Path $RepoRoot 'skills'
 $targets = @(
     @{ Root = Join-Path $HOME '.codex\skills';  Label = 'Codex user skills' },
@@ -24,7 +41,7 @@ foreach ($target in $targets) {
             $item = Get-Item -LiteralPath $linkPath -Force
             $isReparse = $item.Attributes.ToString().Contains('ReparsePoint')
             if ($isReparse) {
-                Remove-Item -LiteralPath $linkPath -Force
+                Remove-LinkPath -Path $linkPath
             } else {
                 Write-Host "Skip existing non-link path: $linkPath"
                 continue

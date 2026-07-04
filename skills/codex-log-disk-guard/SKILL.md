@@ -41,8 +41,8 @@ python3 scripts/monitor_disk_writes_linux.py --top 12 --interval-seconds 2
 
 ## Example user prompts
 
-- `帮我检查 ~/.codex/logs_2.sqlite 是否因 TRACE 日志持续高频写盘；如果中招，先备份，再用 SQLite trigger 拦截 logs 表 insert，并 checkpoint/truncate WAL，最后采样确认 MAX(id) 和 WAL 不再增长`
-- `Inspect ~/.codex/logs_2.sqlite for a TRACE write storm, back it up, block further logs inserts with a trigger, checkpoint and truncate WAL, then verify that MAX(id) and WAL stop growing.`
+- `Use $codex-log-disk-guard to inspect ~/.codex/logs_2.sqlite, back it up, block further logs inserts with a trigger, checkpoint and truncate WAL, then verify that MAX(id) and WAL stop growing.`
+- `使用 $codex-log-disk-guard 检查 ~/.codex/logs_2.sqlite，必要时先备份，再拦截 logs insert，checkpoint/truncate WAL，最后确认 MAX(id) 和 WAL 不再增长。`
 
 ## Workflow
 

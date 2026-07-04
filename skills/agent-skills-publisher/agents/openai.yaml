@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Skills Publisher"
+  short_description: "Publish and install shared skill repos"
+  default_prompt: "Use $agent-skills-publisher to organize, install, validate, or publish a shared skill repository for Codex and Claude Code."
