@@ -47,9 +47,9 @@ def _human_size(n: float) -> str:
         n = -n
     for unit in _SIZE_UNITS:
         if n < 1024 or unit == _SIZE_UNITS[-1]:
-            return f"{sign}{n:,.2f} {unit}"
+            return f"{sign}{n:.2f} {unit}"
         n /= 1024
-    return f"{sign}{n:,.2f} {_SIZE_UNITS[-1]}"
+    return f"{sign}{n:.2f} {_SIZE_UNITS[-1]}"
 
 
 def _human_rate(bytes_per_sec: float) -> Tuple[float, str]:
@@ -152,6 +152,9 @@ class TerminalDisplay:
                 out.append(_CURSOR_HIDE)
                 self._active = True
             out.append("\033[H")   # home
+        else:
+            # Scroll mode: ensure frames don't concatenate
+            out.append("\n")
         out.append(frame)
         sys.stdout.write("".join(out))
         sys.stdout.flush()
@@ -249,7 +252,7 @@ def build_frame(
     # --- Table ---
     width = _term_width()
     disp.rule()
-    disp.add(f"{'RATE':>9}  {'ACCUM':>10}  {'PID':>7}  PROCESS", bold=True)
+    disp.add(f"{'RATE':>12}  {'ACCUM':>12}  {'PID':>7}  PROCESS", bold=True)
     disp.rule()
 
     if not top_rows:
@@ -268,20 +271,20 @@ def build_frame(
                 flag_str = f" {_RED}{flag}{_RESET}" if disp.colour else f" {flag}"
 
             # Truncate name
-            prefix_len = 9 + 2 + 10 + 2 + 7 + 2
+            prefix_len = 12 + 2 + 12 + 2 + 7 + 2   # RATE + ACCUM + PID + separators
             max_name = max(6, width - prefix_len - len(flag) - 2)
             if len(name) > max_name:
                 name = name[: max_name - 1] + "…"
 
             disp.add(
-                f"{rval:8.2f}{runit}  {_human_size(accum):>10}  {row['pid']:7d}  {name}{flag_str}",
+                f"{rval:8.2f}{runit}  {_human_size(accum):>12}  {row['pid']:7d}  {name}{flag_str}",
                 colour=col,
             )
 
     # --- Footer ---
     disp.rule()
     disp.add(
-        f"{'Total':>9}  {_human_size(total_accum):>10}  {'':>7}  {rows_total} processes",
+        f"{'Total':>12}  {_human_size(total_accum):>12}  {'':>7}  {rows_total} processes",
         dim=True, colour=_colour_for_rate(total_rate),
     )
 
