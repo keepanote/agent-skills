@@ -1,30 +1,51 @@
 ---
 name: codex-log-disk-guard
-description: Inspect, mitigate, and monitor runaway Codex SQLite log writes on Windows. Use when Codex needs to analyze `~/.codex/logs.sqlite` or `~/.codex/logs_2.sqlite`, estimate write amplification or disk wear, back up the database, block further `logs` inserts with a SQLite trigger, checkpoint or truncate WAL, compact the database, or monitor which Windows processes are writing heavily to disk.
+description: Inspect, mitigate, and monitor runaway Codex SQLite log writes on Windows, macOS, and Linux. Use when Codex needs to analyze `~/.codex/logs.sqlite` or `~/.codex/logs_2.sqlite`, estimate write amplification or disk wear, back up the database, block further `logs` inserts with a SQLite trigger, checkpoint or truncate WAL, compact the database, or monitor which processes are writing heavily to disk.
 ---
 
 # Codex Log Disk Guard
 
 Use the bundled scripts instead of hand-writing ad hoc SQL or one-off PowerShell unless the task clearly needs a different workflow.
 
+## Prerequisites
+
+Python 3 with stdlib `sqlite3` module. macOS ships with Python 3 + sqlite3 by default.
+
+### macOS
+
+```bash
+# Verify Python 3 and sqlite3 are available
+python3 -c "import sqlite3; print('ready')"
+```
+
+### Ubuntu / Debian
+
+```bash
+sudo apt-get update && sudo apt-get install -y python3
+```
+
+### Windows
+
+Install Python 3 from [python.org](https://www.python.org/downloads/) (ensure "Add Python to PATH" is checked).
+
 ## Quick Start
 
 Inspect the default Codex log database and estimate write volume:
 
-```powershell
-python scripts/codex_log_guard.py inspect
+```bash
+python3 scripts/codex_log_guard.py inspect
 ```
 
 Back up the database, install a `BEFORE INSERT` trigger on `logs`, truncate WAL, and verify that `MAX(id)` stops growing:
 
-```powershell
-python scripts/codex_log_guard.py guard --sample-seconds 8
+```bash
+python3 scripts/codex_log_guard.py guard --sample-seconds 8
 ```
 
 Compact the database after inserts are blocked:
 
-```powershell
-python scripts/codex_log_guard.py vacuum
+```bash
+python3 scripts/codex_log_guard.py vacuum
 ```
 
 Watch top disk-writing processes on Windows:
@@ -37,6 +58,16 @@ Watch top disk-writing processes on Linux:
 
 ```bash
 python3 scripts/monitor_disk_writes_linux.py --top 12 --interval-seconds 2
+```
+
+Watch disk activity on macOS (no per-process write counters available; use system tools):
+
+```bash
+# Track filesystem writes in real time (requires sudo)
+sudo fs_usage -w -f filesystem
+
+# Monitor disk I/O stats
+sudo iostat -Id disk0 1
 ```
 
 ## Example user prompts
@@ -76,10 +107,21 @@ python3 scripts/monitor_disk_writes_linux.py --top 12 --interval-seconds 2
 - Treat `MAX(id)` as a monotonic sequence with gaps. A stable `MAX(id)` across repeated samples is the main stop-the-bleeding signal.
 - Expect SSD wear estimates to be lower-bounded by DB and WAL growth. Real physical writes are usually higher because SQLite writes pages and checkpoints, not only row payload bytes.
 
+## Platform Support
+
+| Script | Windows | Ubuntu | macOS |
+|--------|---------|--------|-------|
+| `codex_log_guard.py` | Yes | Yes | Yes |
+| `monitor_disk_writes.ps1` | Yes | No | No |
+| `monitor_disk_writes_linux.py` | No | Yes | No |
+| Per-process write counters | Via PS | Via `/proc/<pid>/io` | Not available |
+
+macOS does not expose per-process disk write counters. Use file-size watches from `codex_log_guard.py` plus `fs_usage` or `iostat` instead.
+
 ## Scripts
 
 - `scripts/codex_log_guard.py`
-  Inspect, back up, guard, sample, checkpoint, and compact the Codex SQLite log DB.
+  Inspect, back up, guard, sample, checkpoint, and compact the Codex SQLite log DB. Cross-platform (Windows, macOS, Linux).
 
 - `scripts/monitor_disk_writes.ps1`
   Sample Windows per-process write rates and optionally watch one or more file paths for size changes.
