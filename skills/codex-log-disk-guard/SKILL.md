@@ -60,14 +60,16 @@ Watch top disk-writing processes on Linux:
 python3 scripts/monitor_disk_writes_linux.py --top 12 --interval-seconds 2
 ```
 
-Watch disk activity on macOS (no per-process write counters available; use system tools):
+Watch top processes and disk throughput on macOS:
 
 ```bash
-# Track filesystem writes in real time (requires sudo)
-sudo fs_usage -w -f filesystem
+python3 scripts/monitor_disk_writes_macos.py --top 12 --interval-seconds 2
+```
 
-# Monitor disk I/O stats
-sudo iostat -Id disk0 1
+For per-process filesystem detail (requires sudo):
+
+```bash
+sudo fs_usage -w -f filesystem
 ```
 
 ## Example user prompts
@@ -114,9 +116,10 @@ sudo iostat -Id disk0 1
 | `codex_log_guard.py` | Yes | Yes | Yes |
 | `monitor_disk_writes.ps1` | Yes | No | No |
 | `monitor_disk_writes_linux.py` | No | Yes | No |
+| `monitor_disk_writes_macos.py` | No | No | Yes |
 | Per-process write counters | Via PS | Via `/proc/<pid>/io` | Not available |
 
-macOS does not expose per-process disk write counters. Use file-size watches from `codex_log_guard.py` plus `fs_usage` or `iostat` instead.
+macOS shows aggregate disk throughput via `iostat` and top processes by CPU/RSS via `psutil`. Use `fs_usage` for per-process filesystem detail.
 
 ## Scripts
 
@@ -128,6 +131,9 @@ macOS does not expose per-process disk write counters. Use file-size watches fro
 
 - `scripts/monitor_disk_writes_linux.py`
   Sample Linux per-process write deltas from `/proc/<pid>/io` and optionally watch one or more file paths for size changes.
+
+- `scripts/monitor_disk_writes_macos.py`
+  Sample macOS aggregate disk write throughput from `iostat` and top processes by CPU/RSS from `psutil`. Per-process disk write bytes are not available on macOS; use `fs_usage` for deeper diagnosis.
 
 ## References
 

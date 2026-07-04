@@ -11,8 +11,8 @@
 - `scripts/monitor_disk_writes_linux.py`
   Supported on Ubuntu and other Linux systems with `/proc/<pid>/io`.
 
-- macOS per-process write monitoring
-  Not fully covered by the current skill. macOS does not expose a Linux-style `/proc/<pid>/io`, and `psutil` does not provide equivalent portable per-process disk-write counters there. Use file-size watches from `codex_log_guard.py` plus platform tools such as `fs_usage` or `iostat` when deeper diagnosis is required.
+- `scripts/monitor_disk_writes_macos.py`
+  Supported on macOS. Uses `iostat` for aggregate disk throughput and `psutil` for process information (CPU/RSS). Requires `psutil` (`pip install psutil`). Per-process disk write bytes are not available on macOS.
 
 ## Publish Strategy
 
@@ -65,22 +65,23 @@ python3 scripts/monitor_disk_writes_linux.py --help
 
 Use the system Python only if it includes `sqlite3`; otherwise install a current Python 3.
 
+Install psutil:
+
+```bash
+pip install psutil
+```
+
 Smoke test:
 
 ```bash
 python3 scripts/codex_log_guard.py --help
+python3 scripts/monitor_disk_writes_macos.py --help
 ```
 
-For disk activity diagnosis:
+For per-process filesystem activity:
 
 ```bash
 sudo fs_usage -w -f filesystem
-```
-
-or:
-
-```bash
-iostat -Id disk0 1
 ```
 
 ### Windows
@@ -155,9 +156,12 @@ python3 scripts/monitor_disk_writes_linux.py --iterations 1 --top 5
 
 macOS:
 
-- do not claim support for per-process byte counters with the current code
-- test only `codex_log_guard.py`
-- if needed, validate operational fallback commands such as `fs_usage`
+```bash
+pip install psutil
+python3 scripts/monitor_disk_writes_macos.py --iterations 1 --top 5 --no-refresh
+```
+
+Verify: disk write throughput from iostat is displayed, top processes are listed. Per-process disk write bytes not supported; validate with `sudo fs_usage -w -f filesystem` if needed.
 
 ## CI Recommendation
 
