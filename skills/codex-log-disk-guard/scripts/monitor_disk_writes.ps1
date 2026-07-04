@@ -5,8 +5,7 @@
 .DESCRIPTION
     Samples Win32_PerfFormattedData_PerfProc_Process every N seconds and shows
     per-process read and write rates (current, 1m, 1h, 24h windows) along with
-    session-accumulated totals.  Supports JSON output, ANSI colour, and
-    graceful Ctrl+C shutdown.
+    session-accumulated totals. Supports JSON output and terminal refresh.
 
 .PARAMETER IntervalSeconds
     Seconds between samples (default: 2).
@@ -27,7 +26,7 @@
     Emit JSON lines instead of human-readable tables.
 
 .PARAMETER NoColor
-    Disable ANSI colour output.
+    Disable coloured output. On Windows PowerShell 5.1, colour is disabled by default.
 #>
 
 [CmdletBinding()]
@@ -45,10 +44,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 # ---------------------------------------------------------------------------
-# ANSI helpers
+# Output helpers
 # ---------------------------------------------------------------------------
-$script:UseColor = (-not $NoColor) -and (-not [string]::IsNullOrEmpty($env:WT_SESSION)) -or
-                   ($host.UI.RawUI.WindowTitle -ne $null)
+$script:IsLegacyWindowsPowerShell = $PSVersionTable.PSVersion.Major -lt 7
+$script:UseColor = (-not $NoColor) -and (-not $script:IsLegacyWindowsPowerShell)
 
 function Write-Colored {
     param([string]$Text, [string]$Color)
@@ -67,21 +66,18 @@ function Write-Colored {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Signal handling (Ctrl+C)
-# ---------------------------------------------------------------------------
-$script:shutdown = $false
-$null = [Console]::TreatControlCAsInput($false)
-try {
-    $null = [Console]::CancelKeyPress
-} catch { }
-
-# We can't easily trap Ctrl+C in a non-advanced PS session, so we rely on
-# the while-loop checking $Iterations and clean up in the `finally` block.
-
 function Get-TerminalWidth {
     try { return $host.UI.RawUI.WindowSize.Width }
     catch { return 120 }
+}
+
+function Start-Frame {
+    if ($Json) { return }
+    try {
+        Clear-Host
+    } catch {
+        Write-Host ("`r`n" * 3)
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -458,7 +454,7 @@ while ($true) {
         }
         Write-Host ($output | ConvertTo-Json -Depth 4 -Compress)
     } else {
-        Write-Host ""
+        Start-Frame
         Write-Colored ("[{0}] 进程磁盘读写监视" -f $now.ToString('yyyy-MM-dd HH:mm:ss')) 'Bold'
         Write-Colored ("采样间隔: {0}s | 运行时长: {1:hh\hmm\m} | 说明: 1h/24h 需持续运行足够久才完整" -f
             $IntervalSeconds, ($now - $startedAt)) 'Dim'
