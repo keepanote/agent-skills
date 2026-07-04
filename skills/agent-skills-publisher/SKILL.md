@@ -31,3 +31,11 @@ Use this skill when the task is about packaging, linking, validating, or publish
 
 - `Use $agent-skills-publisher to move my local skills into a shared Git repo and install them for Codex and Claude Code.`
 - `Use $agent-skills-publisher to add a second skill, validate the repo structure, and prepare the repo for GitHub.`
+
+## References
+
+- `references/repo-layout.md`
+  Read this when creating or reviewing a multi-skill repository layout, install targets, or Git-tracked files.
+
+- `references/validation-checklist.md`
+  Read this when validating that a shared skill repo is safe to publish and works for both Codex and Claude Code.

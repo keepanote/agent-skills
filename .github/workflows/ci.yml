@@ -22,9 +22,33 @@ jobs:
         run: |
           python -m py_compile skills/codex-log-disk-guard/scripts/codex_log_guard.py
           python -m py_compile skills/codex-log-disk-guard/scripts/monitor_disk_writes_linux.py
+          python - <<'PY'
+          from pathlib import Path
+          skills = Path("skills")
+          missing = []
+          for skill_dir in skills.iterdir():
+              if skill_dir.is_dir() and not (skill_dir / "SKILL.md").exists():
+                  missing.append(str(skill_dir))
+          if missing:
+              raise SystemExit("Missing SKILL.md: " + ", ".join(missing))
+          print("All skills contain SKILL.md")
+          PY
 
       - name: Help smoke test
         run: python skills/codex-log-disk-guard/scripts/codex_log_guard.py --help
+
+      - name: Validate second skill files
+        if: runner.os != 'Windows'
+        run: |
+          test -f skills/agent-skills-publisher/SKILL.md || exit 1
+          test -f skills/agent-skills-publisher/agents/openai.yaml || exit 1
+
+      - name: Validate second skill files on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'skills/agent-skills-publisher/SKILL.md')) { exit 1 }
+          if (!(Test-Path 'skills/agent-skills-publisher/agents/openai.yaml')) { exit 1 }
 
       - name: Linux monitor help
         if: runner.os == 'Linux'
