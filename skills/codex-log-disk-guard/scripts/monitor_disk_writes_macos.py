@@ -140,7 +140,7 @@ class TerminalDisplay:
                 self._active = True
             out.append("\033[H")
         else:
-            out.append("\n")
+            out.append("\n\n")
         out.append(frame)
         sys.stdout.write("".join(out))
         sys.stdout.flush()
@@ -299,12 +299,6 @@ def build_frame(
                 delta_str = "n/a"
             disp.add(f"{delta_str:>12}  {path}")
 
-    disp.add("")
-    disp.add(
-        "Tip: per-process disk write bytes not available on macOS. "
-        "Use sudo fs_usage -w -f filesystem for per-process filesystem activity.",
-        dim=True, colour=_BLUE,
-    )
 
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -341,6 +335,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         kind = "colour+refresh" if use_refresh else ("colour" if use_colour else "plain text")
         print(f"Sampling every {args.interval_seconds}s, top {args.top}  "
               f"[{kind}]  Ctrl+C to stop.", file=sys.stderr)
+        print("Tip: per-process disk write bytes not available on macOS. "
+              "Use sudo fs_usage -w -f filesystem for per-process detail.", file=sys.stderr)
 
     # Start iostat background reader
     iostat = IostatReader(args.interval_seconds + 0.5)
