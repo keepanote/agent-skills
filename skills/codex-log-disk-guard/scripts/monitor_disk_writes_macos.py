@@ -153,14 +153,13 @@ class TerminalDisplay:
 
 
 class IostatReader:
-    """Reads disk write throughput from iostat in background."""
+    """Reads disk I/O throughput from iostat in background."""
 
     def __init__(self, interval: float):
         self._interval = interval
         self._proc: Optional[subprocess.Popen] = None
-        self._disk_mb_per_s = 0.0
-        self._disk_xfrs_per_s = 0.0
-        self._disk_name = ""
+        self._io_mb_per_s = 0.0
+        self._io_xfrs_per_s = 0.0
         self._started = False
 
     def start(self) -> None:
@@ -175,25 +174,22 @@ class IostatReader:
         self._proc.stdout.readline()
         self._started = True
 
-    def read_current(self) -> Tuple[float, float, str]:
-        """Returns (MB/s, xfers/s, disk_name). Blocks until next sample line."""
+    def read_current(self):
+        """Returns (MB/s, xfrs/s). Blocks until next sample."""
         if not self._started:
             self.start()
-            return (0.0, 0.0, "")
+            return (0.0, 0.0)
         line = self._proc.stdout.readline()
         if not line:
-            return (0.0, 0.0, "")
+            return (0.0, 0.0)
         parts = line.strip().split()
         if len(parts) >= 3:
             try:
-                kbt = float(parts[0])
-                xfrs = float(parts[1])
-                mb = float(parts[2])
-                self._disk_mb_per_s = mb
-                self._disk_xfrs_per_s = xfrs
+                self._io_mb_per_s = float(parts[2])
+                self._io_xfrs_per_s = float(parts[1])
             except (ValueError, IndexError):
                 pass
-        return (self._disk_mb_per_s, self._disk_xfrs_per_s, "")
+        return (self._io_mb_per_s, self._io_xfrs_per_s)
 
     def stop(self) -> None:
         if self._proc:
@@ -203,6 +199,13 @@ class IostatReader:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
             self._proc = None
+
+
+def _sanitize_name(name: str, max_len: int) -> str:
+    name = name.encode('ascii', errors='replace').decode('ascii').replace('?', '')
+    if len(name) > max_len:
+        return name[: max_len - 3] + "..."
+    return name
 
 
 def read_process_sample() -> List[dict]:
@@ -242,9 +245,8 @@ def _cpu_colour(cpu: float) -> str:
 def build_frame(
     disp: TerminalDisplay,
     procs: List[dict],
-    disk_mb_s: float,
-    disk_xfrs_s: float,
-    disk_bytes_s: float,
+    io_mb_s: float,
+    io_xfrs_s: float,
     iteration: int,
     interval: float,
     top_n: int,
@@ -255,7 +257,7 @@ def build_frame(
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     parts = [
         f"[{ts}]", f"interval={interval}s", f"top={top_n}",
-        f"disk write: {disk_mb_s:.2f} MB/s ({disk_xfrs_s:.0f} xfrs/s)", f"#{iteration}",
+        f"disk I/O: {io_mb_s:.2f} MB/s ({io_xfrs_s:.0f} xfrs/s)", f"#{iteration}",
     ]
     disp.add("  ".join(parts), bold=True, colour=_CYAN)
 
@@ -267,13 +269,11 @@ def build_frame(
         disp.add("  (no processes)", dim=True)
     else:
         width = _term_width()
+        prefix_len = 6 + 2 + 10 + 2 + 7 + 2
+        max_name = max(6, width - prefix_len - 2)
         for row in procs:
             col = _cpu_colour(row["cpu"])
-            name = row["name"]
-            prefix_len = 6 + 2 + 10 + 2 + 7 + 2
-            max_name = max(6, width - prefix_len - 2)
-            if len(name) > max_name:
-                name = name[: max_name - 1] + "\u2026"
+            name = _sanitize_name(row["name"], max_name)
             disp.add(
                 f"{row['cpu']:5.1f}%  {_human_size(row['rss']):>10}  {row['pid']:7d}  {name}",
                 colour=col,
@@ -335,10 +335,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         kind = "colour+refresh" if use_refresh else ("colour" if use_colour else "plain text")
         print(f"Sampling every {args.interval_seconds}s, top {args.top}  "
               f"[{kind}]  Ctrl+C to stop.", file=sys.stderr)
-        print("Tip: per-process disk write bytes not available on macOS. "
-              "Use sudo fs_usage -w -f filesystem for per-process detail.", file=sys.stderr)
+        print("Tip: disk I/O = reads + writes total. macOS does not separate them."
+              "\n      Use sudo fs_usage -w -f filesystem for per-process detail.", file=sys.stderr)
 
-    # Start iostat background reader
+    # Start iostat reader
     iostat = IostatReader(args.interval_seconds + 0.5)
     iostat.start()
     # Prime psutil with an initial call so first cpu_percent is non-zero
@@ -348,11 +348,9 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     try:
         while not shutdown:
-            # Read iostat sample (blocks ~interval seconds)
-            disk_mb_s, disk_xfrs_s, disk_name = iostat.read_current()
+            # Read top disk sample (blocks ~interval seconds)
+            io_mb_s, io_xfrs_s = iostat.read_current()
             iteration += 1
-
-            disk_bytes_s = disk_mb_s * 1024 * 1024
 
             # Read processes
             procs = read_process_sample()
@@ -368,9 +366,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                     "interval_seconds": args.interval_seconds,
                     "iteration": iteration,
                     "disk": {
-                        "mb_per_sec": disk_mb_s,
-                        "bytes_per_sec": disk_bytes_s,
-                        "xfers_per_sec": disk_xfrs_s,
+                        "io_mb_per_sec": io_mb_s,
+                        "io_xfrs_per_sec": io_xfrs_s,
                     },
                     "processes_seen": len(procs),
                     "rows": [
@@ -394,7 +391,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                 }, ensure_ascii=False))
             else:
                 build_frame(
-                    disp, top_procs, disk_mb_s, disk_xfrs_s, disk_bytes_s,
+                    disp, top_procs, io_mb_s, io_xfrs_s,
                     iteration, args.interval_seconds, args.top,
                     args.watch_path, previous_paths, current_paths,
                 )
