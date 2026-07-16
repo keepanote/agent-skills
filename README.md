@@ -20,6 +20,7 @@ Installers then link those skills into the directories used by Codex and Claude 
 
 - `codex-log-disk-guard`
 - `agent-skills-publisher`
+- `sysclean`
 
 ## 中文说明
 
@@ -30,6 +31,7 @@ Installers then link those skills into the directories used by Codex and Claude 
 - `Use $codex-log-disk-guard to inspect ~/.codex/logs_2.sqlite, block runaway TRACE inserts, checkpoint WAL, and verify that MAX(id) stops growing.`
 - `使用 $codex-log-disk-guard 检查 ~/.codex/logs_2.sqlite，必要时备份、阻断 logs 写入、truncate WAL，并确认 MAX(id) 不再增长。`
 - `Use $agent-skills-publisher to install this shared skill repo for both Codex and Claude Code, then prepare it for GitHub publishing.`
+- `使用 $sysclean 压缩进程工作集并清理临时文件以释放内存;默认不清空回收站,需要时加 -IncludeRecycleBin。`
 
 ## Install on Windows
 
